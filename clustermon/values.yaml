@@ -33,7 +33,7 @@ prometheus-operator:
             summary: "etcd failed proposals"
             description: "{{ $labels.instance }} failed etcd proposals over the past 10 minutes has increased. May signal etcd cluster instability"
 
-  # The Prometheus
+  # Tolerate taints that blocks other nodes from running on the node with Prometheus on it
   nodeExporter:
     tolerations:
     - key: "dedicated"
