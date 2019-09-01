@@ -1,0 +1,202 @@
+prometheus-operator:
+  additionalPrometheusRules:
+    - name: custom-alerts
+      groups:
+      - name: generic.rules
+        rules:
+        - alert: HighNodeCPU
+          expr: instance:node_cpu:ratio > 0.9
+          for: 5m
+          labels:
+            severity: critical
+            group: custom
+          annotations:
+            summary: "High CPU load"
+            description: "{{ $labels.instance }} has a CPU load of > 90% for the past 5 mins"
+
+        - alert: NodeDown
+          expr: sum by (node, instance, pod) (kube_node_status_condition{status='unknown'}) > 0
+          for: 5m
+          labels:
+            severity: warning
+            group: custom
+          annotations:
+            summary: "Kubernetes node down"
+            description: "{{ $labels.node }} has a status unknown for the past 5 mins"
+
+        - alert: EtcdFailedProposals
+          expr: increase(etcd_server_proposal_failed_total[10m]) > 10
+          labels:
+            severity: warning
+            group: custom
+          annotations:
+            summary: "etcd failed proposals"
+            description: "{{ $labels.instance }} failed etcd proposals over the past 10 minutes has increased. May signal etcd cluster instability"
+
+  # The Prometheus
+  nodeExporter:
+    tolerations:
+    - key: "dedicated"
+      operator: "Exists"
+      effect: "NoSchedule"
+    - key: "dedicated"
+      operator: "Exists"
+      effect: "NoExecute"
+
+  # Grafana
+  grafana:
+    # set admin password during helm install with:
+    # `--set prometheus-operator.grafana.adminPassword="..."`
+    adminUser: "some-admin-user"
+
+  # Alert Manager
+  ## https://prometheus.io/docs/alerting/configuration/
+  alertmanager:
+    serviceAccount:
+      create: true
+      name: alertmanager
+
+    templateFiles:
+      slack_template.tmpl: |-
+        {{ define "slack.techops.text" }}
+          *Summary:* {{ .CommonAnnotations.summary }}
+          *Description:* {{ .CommonAnnotations.description }}
+          *Details:*
+           • *namespace*: `{{ .CommonLabels.namespace }}`
+           • *severity*: `{{ .CommonLabels.severity }}`
+           • *pod*: `{{ .CommonLabels.pod }}`
+           • *instance*: `{{ .CommonLabels.instance }}`
+        {{ end }}
+
+    config:
+      global:
+        resolve_timeout: 5m
+        smtp_from: 'sysadmin@example.com'
+        smtp_smarthost: 'some-smtp-host'
+
+      templates:
+      - '*.tmpl'
+
+      route:
+        group_by: ['job']
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 12h
+        receiver: 'null'
+
+        # This can be used to route specific specific type of alerts to specific teams.
+        routes:
+        - match:
+            alertname: DeadMansSwitch
+          receiver: 'null'
+        - match:
+            alertname: TargetDown
+          receiver: 'null'
+        - match:
+            severity: warning
+            group: custom
+          group_by: ['namespace']
+          receiver: 'slack'
+        - match:
+            severity: critical
+            group: custom
+          group_by: ['namespace']
+          receiver: 'victorops'
+
+      receivers:
+      - name: 'null'
+      - name: 'sysadmins-email'
+        email_configs:
+          - to: 'sysadmin@example.com'
+      - name: 'slack'
+        slack_configs:
+          - username: 'Prometheus'
+            send_resolved: true
+            api_url: ''
+            title: '[{{ .Status | toUpper }}] Warning Alert'
+            text: >-
+              {{ template "slack.techops.text" . }}
+
+      - name: 'victorops'
+        victorops_configs:
+          - routing_key: 'routing_key'
+            message_type: '{{ .CommonLabels.severity }}'
+            entity_display_name: '{{ .CommonAnnotations.summary }}'
+            state_message: >-
+              {{ template "slack.techops.text" . }}
+            api_url: ''
+            api_key: ''
+
+    alertmanagerSpec:
+      storage:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: gp2
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 30Gi
+        selector: {}
+
+  prometheus:
+    # Define your custom service monitors here
+    # additionalServiceMonitors:
+    #   - name: traefik-monitor
+    #     namespace: monitoring
+    #     selector:
+    #       matchLabels:
+    #         app: traefik
+    #     namespaceSelector:
+    #       matchNames:
+    #       - kube-system
+    #     endpoints:
+    #     - basicAuth:
+    #         password:
+    #           name: traefik-monitor-metrics-auth
+    #           key: password
+    #         username:
+    #           name: traefik-monitor-metrics-auth
+    #           key: user
+    #       port: metrics
+    #       interval: 10s
+
+    prometheusSpec:
+      # This will only schedule prometheus onto a node that has this label!
+      # nodeSelector:
+      #  node: prometheus
+
+      tolerations:
+      - key: "dedicated"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "dedicated"
+        operator: "Exists"
+        effect: "NoExecute"
+
+      retention: 20h
+      serviceMonitorsSelector:
+        matchExpressions:
+          - {key: prometheus, operator: In, values: [clustermon]}
+
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: gp2
+            accessModes: ["ReadWriteOnce"]
+            resources:
+              requests:
+                storage: 50Gi
+          selector: {}
+
+        # Change to the following if you want to use a named persistent volume
+        # e.g. create a PV with the name prometheus-pv before switching to this
+        # volumeClaimTemplate:
+        #   spec:
+        #     volumeName: prometheus-pv
+        #     selector:
+        #       matchLabels:
+        #         app: prometheus-pv
+        #     resources:
+        #       requests:
+        #         storage: 100Gi
+        # selector: {}
