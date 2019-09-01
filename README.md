@@ -1,10 +1,12 @@
-# Cluster-Monitoring
+# Prometheus-Operator Example
 
 - This is the main helm chart for deploying a sample monitoring stack:
   - Prometheus
   - Grafana
   - AlertManager
-- This assumes that prometheus-operator (and its CRDs) have been deployed beforehand.
+
+- Read about how it works in this blog post:
+[https://aranair.github.io/posts/2019/08/01/prometheus-monitoring-in-kubernetes/][https://aranair.github.io/posts/2019/08/01/prometheus-monitoring-in-kubernetes/]
 
 # Installation
 
